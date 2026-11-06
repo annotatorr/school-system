@@ -1,0 +1,40 @@
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { PortalApp } from '../../../packages/portal-ui/src/PortalApp';
+const config = {
+  key: 'school-admin',
+  title: 'School Administrator',
+  subtitle: 'School administration',
+  intro: "Manage your school's users, classes, academic setup, fees and authorized operations.",
+  overview: 'School overview',
+  modules: [
+    'school profile',
+    'students',
+    'admissions',
+    'parents and guardians',
+    'staff',
+    'classes and streams',
+    'subjects',
+    'teacher assignments',
+    'academic years and terms',
+    'timetables',
+    'examinations and results',
+    'attendance',
+    'school fees',
+    'payments',
+    'library',
+    'inventory',
+    'transport',
+    'meals',
+    'staff leave',
+    'discipline and welfare',
+    'events and calendar',
+    'documents and certificates',
+    'reports',
+    'notifications',
+    'school settings',
+    'audit history',
+  ],
+  urlHint: 'school-admin.yourdomain.com',
+} as const;
+createRoot(document.getElementById('root')!).render(<React.StrictMode><PortalApp config={config} /></React.StrictMode>);

@@ -1,0 +1,34 @@
+{
+  "name": "schhol-system",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:platform-admin": "npm --workspace apps/platform-admin run dev",
+    "dev:school-admin": "npm --workspace apps/school-admin run dev",
+    "dev:principal": "npm --workspace apps/principal run dev",
+    "dev:secretary": "npm --workspace apps/secretary run dev",
+    "dev:teacher": "npm --workspace apps/teacher run dev",
+    "dev:student": "npm --workspace apps/student run dev",
+    "dev:parent": "npm --workspace apps/parent run dev",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "~5.6.3",
+    "vite": "^6.0.5"
+  }
+}

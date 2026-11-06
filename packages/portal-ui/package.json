@@ -1,0 +1,10 @@
+{
+  "name": "@schhol/portal-ui",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./PortalApp": "./src/PortalApp.tsx",
+    "./styles.css": "./src/styles.css"
+  }
+}
