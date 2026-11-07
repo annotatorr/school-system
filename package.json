@@ -15,6 +15,7 @@
     "dev:teacher": "npm --workspace apps/teacher run dev",
     "dev:student": "npm --workspace apps/student run dev",
     "dev:parent": "npm --workspace apps/parent run dev",
+    "dev:portal-auth": "node --env-file=.env server/portal-auth.mjs",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },

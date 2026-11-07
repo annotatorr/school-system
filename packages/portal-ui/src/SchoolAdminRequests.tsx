@@ -20,8 +20,24 @@ type AdminRequest = {
   applicantPhotoUrl: string;
 };
 
-const messageOf = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
+const messageOf = (error: unknown) => {
+  if (error instanceof Error) return error.message;
+  if (!error || typeof error !== 'object') return String(error);
+
+  const value = error as {
+    message?: unknown;
+    details?: unknown;
+    hint?: unknown;
+    code?: unknown;
+  };
+  const parts = [value.message, value.details, value.hint].filter(
+    (part): part is string => typeof part === 'string' && part.length > 0,
+  );
+  if (typeof value.code === 'string' && value.code) {
+    parts.push(`Code ${value.code}`);
+  }
+  return parts.join(' · ') || 'Supabase returned an unspecified error.';
+};
 
 const dateLabel = (value: string | null) => {
   if (!value) return '—';

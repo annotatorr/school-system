@@ -10,6 +10,7 @@ const config = {
   modules: [
     'school profile',
     'students',
+    'account requests',
     'admissions',
     'parents and guardians',
     'staff',

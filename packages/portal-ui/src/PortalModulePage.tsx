@@ -7,9 +7,14 @@ type ModuleRow = {
   id: string;
   title: string;
   detail: string;
+  documents?: {
+    documentType: string;
+    filename: string;
+    storagePath: string;
+  }[];
   status?: string;
   date?: string;
-  kind?: 'admission' | 'teacher-application' | 'assignment';
+  kind?: 'admission' | 'teacher-application' | 'account-request' | 'assignment';
 };
 
 type SchoolClass = {
@@ -55,8 +60,21 @@ const emptySchool: SchoolDetails = {
   logo_path: null,
 };
 
-const messageOf = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
+const messageOf = (error: unknown) => {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const record = error as {
+      message?: unknown;
+      details?: unknown;
+      hint?: unknown;
+    };
+    const parts = [record.message, record.details, record.hint].filter(
+      (part): part is string => typeof part === 'string' && part.length > 0,
+    );
+    if (parts.length) return parts.join(' · ');
+  }
+  return String(error);
+};
 
 const dateLabel = (value?: string | null) => {
   if (!value) return '—';
@@ -91,6 +109,7 @@ export function PortalModulePage({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [documentLinks, setDocumentLinks] = useState<Record<string, string>>({});
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [classForm, setClassForm] = useState({ name: '', level: '', stream: '' });
   const [subjectForm, setSubjectForm] = useState({ name: '', code: '' });
@@ -202,6 +221,93 @@ export function PortalModulePage({
             detail: [profile?.email, profile?.phone].filter(Boolean).join(' · ') || 'No contact details',
             status: `${membership.role} · ${membership.status}`,
             date: membership.created_at,
+          };
+        }));
+      } else if (moduleName === 'account requests') {
+        const { data, error: requestsError } = await supabase
+          .from('school_account_requests')
+          .select('id,user_id,requested_role,applicant_name,applicant_username,applicant_email,applicant_phone,request_data,status,created_at,generated_identifier')
+          .eq('school_id', schoolId)
+          .order('created_at', { ascending: false });
+        if (requestsError) throw requestsError;
+        const requestUserIds = [...new Set((data ?? []).map((request) => request.user_id))];
+        const [documentResult, profileResult] = requestUserIds.length
+          ? await Promise.all([
+              supabase
+                .from('portal_account_documents')
+                .select('user_id,document_type,original_filename,storage_path')
+                .eq('school_id', schoolId)
+                .in('user_id', requestUserIds),
+              supabase
+                .from('portal_account_profiles')
+                .select('user_id,phone,date_of_birth,guardian_name,guardian_phone,emergency_contact_name,emergency_contact_phone')
+                .eq('school_id', schoolId)
+                .in('user_id', requestUserIds),
+            ])
+          : [
+              { data: [], error: null },
+              { data: [], error: null },
+            ];
+        const { data: documents, error: documentsError } = documentResult;
+        if (documentsError) throw documentsError;
+        const { data: accountProfiles, error: profilesError } = profileResult;
+        if (profilesError) throw profilesError;
+        const documentsByUser = new Map<string, NonNullable<ModuleRow['documents']>>();
+        for (const document of documents ?? []) {
+          const userDocuments = documentsByUser.get(document.user_id) || [];
+          userDocuments.push({
+            documentType: document.document_type,
+            filename: document.original_filename,
+            storagePath: document.storage_path,
+          });
+          documentsByUser.set(document.user_id, userDocuments);
+        }
+        const profilesByUser = new Map(
+          (accountProfiles ?? []).map((profile) => [profile.user_id, profile]),
+        );
+        setRows((data ?? []).map((request) => {
+          const requestData = request.request_data as {
+            related_admission_number?: string;
+            relationship?: string;
+          };
+          const parentDetails = request.requested_role === 'parent'
+            ? [
+                requestData.related_admission_number
+                  ? `Student ${requestData.related_admission_number}`
+                  : '',
+                requestData.relationship || '',
+              ].filter(Boolean).join(' · ')
+            : '';
+          const accountProfile = profilesByUser.get(request.user_id);
+          const profileDetails = accountProfile
+            ? [
+                accountProfile.phone,
+                accountProfile.date_of_birth
+                  ? `DOB ${accountProfile.date_of_birth}`
+                  : '',
+                accountProfile.guardian_name
+                  ? `Guardian ${accountProfile.guardian_name} ${accountProfile.guardian_phone || ''}`
+                  : '',
+                accountProfile.emergency_contact_name
+                  ? `Emergency ${accountProfile.emergency_contact_name} ${accountProfile.emergency_contact_phone}`
+                  : '',
+              ].filter(Boolean).join(' · ')
+            : '';
+          return {
+            id: request.id,
+            title: `${request.applicant_name} · ${request.requested_role}`,
+            detail: [
+              request.applicant_username,
+              request.applicant_email,
+              request.applicant_phone || '',
+              parentDetails,
+              profileDetails,
+              request.generated_identifier || '',
+            ].filter(Boolean).join(' · '),
+            status: request.status,
+            date: request.created_at,
+            kind: 'account-request',
+            documents: documentsByUser.get(request.user_id) || [],
           };
         }));
       } else if (moduleName === 'admissions' || moduleName === 'approvals') {
@@ -488,7 +594,24 @@ export function PortalModulePage({
         setRows([]);
       }
     } catch (loadError) {
-      setError(`Could not load ${page.toLowerCase()}: ${messageOf(loadError)}`);
+      const errorMessage = messageOf(loadError);
+      if (
+        moduleName === 'account requests' &&
+        errorMessage.includes('school_account_requests')
+      ) {
+        setError(
+          'Account requests are not installed in the connected Supabase database. Apply supabase/migrations/202611060003_school_account_signup_approval.sql in the Supabase SQL Editor, then refresh this page.',
+        );
+      } else if (
+        moduleName === 'account requests' &&
+        errorMessage.includes('portal_account_documents')
+      ) {
+        setError(
+          'Private account documents are not installed in the connected Supabase database. Apply supabase/migrations/202611060006_school_portal_profile_documents.sql, then refresh this page.',
+        );
+      } else {
+        setError(`Could not load ${page.toLowerCase()}: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -712,16 +835,22 @@ export function PortalModulePage({
     setError('');
     try {
       let logoPath = school.logo_path;
+      let logoWarning = '';
       if (schoolLogo) {
         if (!['image/jpeg', 'image/png', 'image/webp'].includes(schoolLogo.type) || schoolLogo.size > 2 * 1024 * 1024) {
           throw new Error('Choose a JPG, PNG or WebP logo smaller than 2 MB.');
         }
         const extension = schoolLogo.type === 'image/png' ? 'png' : schoolLogo.type === 'image/webp' ? 'webp' : 'jpg';
-        logoPath = `${schoolId}/logo.${extension}`;
-        const { error: uploadError } = await supabase.storage
-          .from('school-logos')
-          .upload(logoPath, schoolLogo, { upsert: true, contentType: schoolLogo.type });
-        if (uploadError) throw uploadError;
+        try {
+          const nextLogoPath = `${schoolId}/logo.${extension}`;
+          const { error: uploadError } = await supabase.storage
+            .from('school-logos')
+            .upload(nextLogoPath, schoolLogo, { upsert: true, contentType: schoolLogo.type });
+          if (uploadError) throw uploadError;
+          logoPath = nextLogoPath;
+        } catch (uploadFailure) {
+          logoWarning = `The logo could not be uploaded: ${messageOf(uploadFailure)}`;
+        }
       }
 
       const { error: updateError } = await supabase.rpc('update_school_branding', {
@@ -737,8 +866,8 @@ export function PortalModulePage({
       });
       if (updateError) throw updateError;
       setSchool({ ...school, logo_path: logoPath });
-      setSchoolLogo(null);
-      setNotice('School profile saved.');
+      if (!logoWarning) setSchoolLogo(null);
+      setNotice(logoWarning ? `School profile saved. ${logoWarning}` : 'School profile saved.');
     } catch (saveError) {
       setError(`Could not save school profile: ${messageOf(saveError)}`);
     } finally {
@@ -872,6 +1001,28 @@ export function PortalModulePage({
     setError('');
     setNotice('');
     try {
+      if (row.kind === 'account-request') {
+        const { data, error: reviewError } = await supabase.rpc(
+          'review_school_account_request',
+          {
+            p_request_id: row.id,
+            p_decision:
+              decision === 'approved' || decision === 'approve'
+                ? 'approved'
+                : 'rejected',
+            p_notes: reviewNotes[row.id]?.trim() || null,
+          },
+        );
+        if (reviewError) throw reviewError;
+        setNotice(
+          decision === 'approved' || decision === 'approve'
+            ? `Account approved. Issued school ID: ${String(data)}`
+            : 'Account request rejected.',
+        );
+        await loadModule();
+        return;
+      }
+
       const functionName = row.kind === 'admission' ? 'admission-review' : 'teacher-application-review';
       const body = row.kind === 'admission'
         ? {
@@ -895,11 +1046,27 @@ export function PortalModulePage({
     }
   }
 
+  async function openPortalDocument(storagePath: string) {
+    if (!supabase) return;
+    const { data, error: signedUrlError } = await supabase.storage
+      .from('school-private-documents')
+      .createSignedUrl(storagePath, 120);
+    if (signedUrlError) {
+      setError(`Could not open the uploaded document: ${messageOf(signedUrlError)}`);
+      return;
+    }
+    setDocumentLinks((current) => ({
+      ...current,
+      [storagePath]: data.signedUrl,
+    }));
+  }
+
   const isParentAdmissions = role === 'parent' && moduleName === 'admissions';
   const canReview = (
     (moduleName === 'admissions' || moduleName === 'approvals')
       && (role === 'secretary' || role === 'principal' || role === 'school-admin')
-  ) || (moduleName === 'teacher applications' && role === 'secretary');
+  ) || (moduleName === 'teacher applications' && role === 'secretary')
+    || (moduleName === 'account requests' && (role === 'principal' || role === 'school-admin'));
   const showClassSetup = role === 'school-admin' && moduleName === 'classes and subjects';
   const showSchoolSettings = role === 'school-admin' && moduleName === 'school settings';
   const showAssignmentComposer = role === 'teacher' && moduleName === 'assignments';
@@ -1117,7 +1284,7 @@ export function PortalModulePage({
 
       {loading ? (
         <div className="workspace-empty"><span className="spinner" /><p>Loading {page.toLowerCase()}…</p></div>
-      ) : rows.length === 0 ? (
+      ) : error ? null : rows.length === 0 ? (
         <div className="workspace-empty"><BookOpen size={24} /><strong>No records yet</strong><p>Records will appear here when they are created for this school.</p></div>
       ) : (
         <div className="workspace-records">
@@ -1127,6 +1294,32 @@ export function PortalModulePage({
                 <strong>{row.title || 'Untitled record'}</strong>
                 <p>{row.detail}</p>
                 {row.date && <small>{dateLabel(row.date)}</small>}
+                {row.documents && row.documents.length > 0 && (
+                  <div className="workspace-document-links">
+                    {row.documents.map((document) => (
+                      documentLinks[document.storagePath] ? (
+                        <a
+                          key={document.storagePath}
+                          className="link-button"
+                          href={documentLinks[document.storagePath]}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          Open {document.documentType.replace(/_/g, ' ')}: {document.filename}
+                        </a>
+                      ) : (
+                        <button
+                          key={document.storagePath}
+                          className="link-button"
+                          type="button"
+                          onClick={() => void openPortalDocument(document.storagePath)}
+                        >
+                          Prepare {document.documentType.replace(/_/g, ' ')}: {document.filename}
+                        </button>
+                      )
+                    ))}
+                  </div>
+                )}
               </div>
               {row.status && <span className={`workspace-status status-${row.status.replace(/[^a-z_]/g, '')}`}>{displayStatus(row.status)}</span>}
               {role === 'student' && row.kind === 'assignment' && row.status !== 'submitted' && (

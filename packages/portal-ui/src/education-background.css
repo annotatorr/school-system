@@ -1,0 +1,7 @@
+.login-side {
+  background-image:
+    linear-gradient(145deg, #172c58e8, #234d88de 65%, #3969adcf),
+    url('https://images.unsplash.com/photo-1509062522246-3755977927d7?auto=format&fit=crop&w=1400&q=80');
+  background-position: center;
+  background-size: cover;
+}

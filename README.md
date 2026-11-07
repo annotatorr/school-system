@@ -32,6 +32,12 @@ npm run dev:parent
 
 Open the local URL printed by Vite (usually `http://localhost:5179`). To run another site, stop the current dev server with `Ctrl+C` and run its command from the table above. You can run multiple commands in separate terminals if you want to compare sites at the same time.
 
+For a school-specific local portal link, add that school's slug to the URL path. For example, run `npm run dev:student` and open `http://localhost:5178/kirinyaga`, or run `npm run dev:teacher` and open `http://localhost:5177/kirinyaga`. Use the slug stored for the school (not necessarily its display name). After sign-in, the portal verifies that the account is linked to that school and limits the portal to that school.
+
+On the Student, Parent, Teacher, or Principal login page, open **Request a school account** to submit an application for the school in the URL. Choose a username and password; no signup email is sent. Parents also provide a phone number and a student's admission number. A School Administrator or Principal reviews requests under **Account requests** (only a School Administrator can approve a Principal). Approval creates the school record and login, generates an ID such as `KIRINYAGA/001/2026`, and saves an in-app notification telling the user to use that school ID with the password they chose. Apply the latest Supabase migrations before testing.
+
+The four school-member portals use the local custom-auth API. Keep `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_JWT_SECRET` server-side in `.env`, apply all Supabase migrations in order, and run `npm run dev:portal-auth` in one terminal plus the relevant portal command in another. Migration `202611060007_school_portal_one_time_username.sql` enforces the one-time username rule; it moves already-approved accounts to school-ID-only sign-in and lets accounts approved afterward use their username for their first successful sign-in. After that first successful login, all Student, Parent, Teacher, and Principal accounts must use their generated school ID. After approval, users complete their profile on first sign-in; students provide a birth certificate and, for secondary/high schools, an invitation letter. Documents are private and available to the account owner and authorized school leadership from **Account requests**. Never use a service-role key in browser code or a `VITE_` variable. Platform Administrator and School Administrator sign-in continue to use Supabase Auth.
+
 To build every site:
 
 ```powershell
@@ -44,7 +50,7 @@ Each app has a separate port and can be run/build/deployed independently. The ap
 
 1. Create a Supabase project.
 2. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from Supabase project settings.
-3. Apply migrations in order to a new, reviewed database: `202610230001_initial_schema.sql`, `202610230002_workflows.sql`, `202610230003_profile_photos_and_portal_profiles.sql`, `202610250001_platform_admin_announcements_and_profiles.sql`, `202610260001_school_branding_and_portal_context.sql`, `202610260002_portal_workflows.sql`, then `202610260003_teacher_signup_requests.sql`.
+3. Apply migrations in order to a new, reviewed database: `202610230001_initial_schema.sql`, `202610230002_workflows.sql`, `202610230003_profile_photos_and_portal_profiles.sql`, `202610250001_platform_admin_announcements_and_profiles.sql`, `202610260001_school_branding_and_portal_context.sql`, `202610260002_portal_workflows.sql`, `202610260003_teacher_signup_requests.sql`, `202610270001_full_school_operations.sql`, `202611060001_fix_guardians_rls_recursion.sql`, `202611060002_school_scoped_student_login.sql`, `202611060003_school_account_signup_approval.sql`, `202611060004_match_school_name_in_portal_links.sql`, then `202611060005_custom_school_portal_credentials.sql`.
 4. Review the RLS rules, authentication configuration, membership roles, and Storage policies before using real data.
 5. Restart Vite after changing `.env`.
 
@@ -61,6 +67,7 @@ Separate URLs and hidden cross-portal links improve privacy and usability, but t
 - Profile photo upload UI, local preview, Supabase Storage upload flow and SQL migration.
 - Platform announcements saved in Supabase and shown in recipient portal inboxes. Delivery is in-app only; email, SMS and push are not configured.
 - Platform-admin user directory with contact details, school roles and signed private profile photos.
+- School-scoped student, parent, teacher and principal account requests, reviewed in the School Administrator or Principal portal. Approval issues school/year-specific student admission, staff or guardian numbers; parent requests must identify a student admission number for staff verification.
 - Existing initial Supabase schema and starter Edge Functions for admissions, teacher application review, Daraja STK Push/callback, AI draft generation and bank-provider boundary.
 - `.env.example`, Windows setup guide, architecture/deployment notes and implementation checklist.
 

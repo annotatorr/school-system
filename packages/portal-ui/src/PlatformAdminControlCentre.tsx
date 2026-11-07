@@ -9,6 +9,7 @@ import {
   PlatformUsersPage,
 } from './PlatformAdminSections';
 import { SchoolAdminRequests } from './SchoolAdminRequests';
+import { ThemeToggle } from './ThemeToggle';
 import {
   useCallback,
   useEffect,
@@ -240,13 +241,19 @@ export function PlatformAdminControlCentre({
       ]);
 
       if (schoolResult.error) throw schoolResult.error;
-      if (overviewResult.error) throw overviewResult.error;
 
       setSchools((schoolResult.data ?? []) as School[]);
-      setOverview({
-        ...emptyOverview,
-        ...(overviewResult.data ?? {}),
-      });
+
+      if (overviewResult.error) {
+        setError(
+          `Could not load platform overview: ${errorMessage(overviewResult.error)}`,
+        );
+      } else {
+        setOverview({
+          ...emptyOverview,
+          ...(overviewResult.data ?? {}),
+        });
+      }
     } catch (e) {
       setError(`Could not load platform data: ${errorMessage(e)}`);
     } finally {
@@ -672,6 +679,7 @@ export function PlatformAdminControlCentre({
           </div>
 
           <div className="pac-actions">
+            <ThemeToggle />
             <button
               className="pac-button pac-refresh"
               onClick={() => void loadData()}

@@ -25,6 +25,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { supabase } from './supabase';
+import { getCurrentPortalIdentity } from './portal-auth';
 import { PortalModulePage } from './PortalModulePage';
 import type { RoleKey } from './portal-types';
 import './portal-workspace.css';
@@ -4613,6 +4614,7 @@ const DELEGATED_PAGES = new Set([
   'admissions',
   'admission-applications',
   'approvals',
+  'account-requests',
   'teacher-applications',
   'attendance',
   'attendance-updates',
@@ -4653,6 +4655,11 @@ export function PortalWorkspace({
   useEffect(() => {
     let alive = true;
     async function resolveUser() {
+      const portalIdentity = getCurrentPortalIdentity();
+      if (portalIdentity) {
+        if (alive) setUserId(portalIdentity.id);
+        return;
+      }
       if (!supabase) {
         setLoading(false);
         return;

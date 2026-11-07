@@ -270,6 +270,18 @@
   margin-top: 7px;
 }
 
+.workspace-document-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 10px;
+}
+
+.workspace-document-links .link-button {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
 .workspace-review,
 .workspace-student-submit {
   width: 100%;

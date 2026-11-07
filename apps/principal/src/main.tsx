@@ -23,6 +23,7 @@ const config = {
     'reports',
     'report cards',
     'approvals',
+    'account requests',
     'notifications',
     'audit history',
     'support',

@@ -1,0 +1,132 @@
+.portal-profile-page {
+  min-height: 100vh;
+  padding: 36px 20px;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(ellipse at 12% 10%, #d7e8ff 0, transparent 34%),
+    radial-gradient(ellipse at 90% 86%, #dcefe9 0, transparent 35%),
+    linear-gradient(145deg, #f7faff, #edf3fa);
+}
+
+.portal-profile-panel {
+  width: min(100%, 620px);
+  padding: clamp(24px, 5vw, 46px);
+  border: 1px solid #e1e9f4;
+  border-radius: 20px;
+  background: #ffffffed;
+  box-shadow: 0 22px 65px #1e3e6914;
+}
+
+.portal-profile-icon {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 22px;
+  border-radius: 15px;
+  background: #eaf0ff;
+  color: #315bd4;
+}
+
+.portal-profile-panel h1 {
+  margin: 0 0 10px;
+  color: #23314a;
+  font: 800 28px/1.2 Manrope, sans-serif;
+}
+
+.portal-profile-panel .eyebrow {
+  overflow-wrap: anywhere;
+}
+
+.portal-profile-form {
+  display: grid;
+  gap: 16px;
+  margin-top: 26px;
+}
+
+.portal-profile-form label {
+  display: grid;
+  gap: 8px;
+  color: #45546a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.portal-profile-form input:not([type='file']) {
+  width: 100%;
+  min-height: 43px;
+  padding: 11px 13px;
+  border: 1px solid #dfe6ef;
+  border-radius: 9px;
+  outline: none;
+  background: #fbfcfe;
+  color: #23314a;
+  font: inherit;
+}
+
+.portal-profile-form input:focus {
+  border-color: #7192ed;
+  box-shadow: 0 0 0 3px #7192ed1c;
+}
+
+.portal-profile-form fieldset {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 17px;
+  border: 1px solid #e5eaf2;
+  border-radius: 12px;
+}
+
+.portal-profile-form legend {
+  padding: 0 7px;
+  color: #45546a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.portal-document-fields {
+  display: grid;
+  gap: 12px;
+  padding: 17px;
+  border: 1px solid #e5eaf2;
+  border-radius: 12px;
+  background: #fbfcfe;
+}
+
+.portal-document-fields h2 {
+  margin: 0;
+  color: #34435a;
+  font: 700 14px Manrope, sans-serif;
+}
+
+.portal-document-field {
+  padding: 12px;
+  border: 1px dashed #cbd6e5;
+  border-radius: 9px;
+  background: white;
+}
+
+.portal-document-field span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.portal-document-field small,
+.portal-document-fields > small {
+  color: #8190a6;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.portal-profile-loading {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #64748b;
+  background: #f5f7fb;
+}

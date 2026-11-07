@@ -1,4 +1,5 @@
 ﻿import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -32,11 +33,28 @@ import {
 } from 'lucide-react';
 
 import { supabase, supabaseReady } from './supabase';
+import {
+  getCurrentPortalIdentity,
+  loginSchoolPortal,
+  logoutSchoolPortal,
+  requestSchoolPortalAccount,
+  restorePortalIdentity,
+  type PortalIdentity,
+  type SchoolPortalRole,
+} from './portal-auth';
+import { PortalProfileCompletion } from './PortalProfileCompletion';
 import { PlatformAdminControlCentre } from './PlatformAdminControlCentre';
 import { PortalWorkspace } from './PortalWorkspace';
+import { ThemeToggle } from './ThemeToggle';
+import { initThemeMode } from './theme';
 import './styles.css';
+import './education-background.css';
 import './portal-workspace.css';
 import './school-context.css';
+import './theme.css';
+import './student-portal.css';
+
+initThemeMode();
 
 type RoleKey =
   | 'platform-admin'
@@ -110,6 +128,8 @@ const moduleCopy: Record<string, string> = {
     'Review submitted applications and their documents.',
   'teacher applications':
     'Review teacher sign-ups and record approval decisions.',
+  'account requests':
+    'Review school-scoped student, parent, teacher and principal sign-up requests.',
   'student records':
     'Maintain verified student details and class links.',
   'fee administration':
@@ -149,6 +169,7 @@ const moduleCopy: Record<string, string> = {
 async function hasPortalAccess(
   userId: string,
   role: RoleKey,
+  schoolId?: string,
 ): Promise<boolean> {
   if (!supabase) return false;
 
@@ -159,28 +180,33 @@ async function hasPortalAccess(
       .eq('user_id', userId)
       .maybeSingle();
 
-    return !error && Boolean(data);
+    if (error) throw new Error(`Could not verify platform access: ${error.message}`);
+    return Boolean(data);
   }
 
   if (role === 'student') {
-    const { data, error } = await supabase
+    let query = supabase
       .from('students')
       .select('id,status')
       .eq('user_id', userId)
-      .eq('status', 'active')
-      .limit(1);
+      .eq('status', 'active');
+    if (schoolId) query = query.eq('school_id', schoolId);
+    const { data, error } = await query.limit(1);
 
-    return !error && Boolean(data?.length);
+    if (error) throw new Error(`Could not verify the student record: ${error.message}`);
+    return Boolean(data?.length);
   }
 
   if (role === 'parent') {
-    const { data, error } = await supabase
+    let guardianQuery = supabase
       .from('guardians')
       .select('id, school_id')
-      .eq('user_id', userId)
-      .limit(5);
+      .eq('user_id', userId);
+    if (schoolId) guardianQuery = guardianQuery.eq('school_id', schoolId);
+    const { data, error } = await guardianQuery.limit(5);
 
-    if (error || !data?.length) return false;
+    if (error) throw new Error(`Could not verify the guardian record: ${error.message}`);
+    if (!data?.length) return false;
 
     const guardianIds = data.map((guardian) => guardian.id);
     const { data: links, error: linkError } = await supabase
@@ -188,7 +214,8 @@ async function hasPortalAccess(
       .select('student_id')
       .in('guardian_id', guardianIds);
 
-    if (linkError || !links?.length) return false;
+    if (linkError) throw new Error(`Could not verify linked students: ${linkError.message}`);
+    if (!links?.length) return false;
 
     const { data: students, error: studentError } = await supabase
       .from('students')
@@ -197,19 +224,22 @@ async function hasPortalAccess(
       .eq('status', 'active')
       .limit(1);
 
-    return !studentError && Boolean(students?.length);
+    if (studentError) throw new Error(`Could not verify the linked student records: ${studentError.message}`);
+    return Boolean(students?.length);
   }
 
   const expectedRole = role.replace('-', '_');
 
-  const { data, error } = await supabase
+  let membershipQuery = supabase
     .from('school_memberships')
     .select('role, status')
     .eq('user_id', userId)
     .eq('status', 'active');
+  if (schoolId) membershipQuery = membershipQuery.eq('school_id', schoolId);
+  const { data, error } = await membershipQuery;
 
+  if (error) throw new Error(`Could not verify the staff membership: ${error.message}`);
   return (
-    !error &&
     Boolean(
       data?.some(
         (membership: { role: string; status: string }) =>
@@ -227,6 +257,30 @@ type PortalSchool = {
   logo_path: string | null;
   motto: string | null;
 };
+
+function getSchoolSlugFromPath(): string {
+  return window.location.pathname
+    .split('/')
+    .filter(Boolean)[0]
+    ?.toLowerCase() || '';
+}
+
+function normalizeSchoolUrl(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function schoolMatchesUrl(school: PortalSchool, requestedSlug: string): boolean {
+  return (
+    normalizeSchoolUrl(school.slug) === requestedSlug ||
+    normalizeSchoolUrl(school.name) === requestedSlug
+  );
+}
 
 /**
  * Resolve the schools this signed-in account may operate in for this portal.
@@ -285,19 +339,30 @@ function GenericPortalApp({
 }: {
   config: PortalConfig;
 }) {
+  const requestedSchoolSlug = getSchoolSlugFromPath();
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
 
   const [email, setEmail] = useState('');
+  const [signupUsername, setSignupUsername] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [signupPhone, setSignupPhone] = useState('');
+  const [signupDateOfBirth, setSignupDateOfBirth] = useState('');
+  const [relatedAdmissionNumber, setRelatedAdmissionNumber] = useState('');
+  const [parentRelationship, setParentRelationship] = useState('Parent/Guardian');
 
   const [schools, setSchools] = useState<SchoolOption[]>([]);
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
   const [schoolsLoading, setSchoolsLoading] = useState(false);
   const [applicationReason, setApplicationReason] = useState('');
   const [signupLoading, setSignupLoading] = useState(false);
+  const [profileSetupDone, setProfileSetupDone] = useState(false);
+  const completeProfileSetup = useCallback(
+    () => setProfileSetupDone(true),
+    [],
+  );
 
   const [portalSchools, setPortalSchools] = useState<PortalSchool[]>([]);
   const [activeSchoolId, setActiveSchoolId] = useState('');
@@ -322,6 +387,96 @@ function GenericPortalApp({
 
     let alive = true;
 
+    if (['student', 'parent', 'teacher', 'principal'].includes(config.key)) {
+      const refreshTimer = window.setInterval(() => {
+        void restorePortalIdentity().catch((error: unknown) => {
+          if (!alive) return;
+          setNotice(
+            error instanceof Error
+              ? `Could not refresh your school session: ${error.message}`
+              : 'Could not refresh your school session.',
+          );
+        });
+      }, 7 * 60 * 1000);
+
+      void restorePortalIdentity()
+        .then(async (identity) => {
+          if (!alive) return;
+          if (!identity) {
+            setSession(null);
+            setLoading(false);
+            return;
+          }
+
+          const roleMatches = identity.role === config.key;
+          const schoolMatches =
+            !requestedSchoolSlug ||
+            schoolMatchesUrl(
+              {
+                id: identity.schoolId,
+                name: identity.schoolName,
+                slug: identity.schoolSlug,
+                status: 'active',
+                logo_path: null,
+                motto: null,
+              },
+              requestedSchoolSlug,
+            );
+          const allowed =
+            roleMatches &&
+            schoolMatches &&
+            (await hasPortalAccess(
+              identity.id,
+              config.key,
+              identity.schoolId,
+            ));
+
+          if (!alive) return;
+          if (!allowed) {
+            await logoutSchoolPortal();
+            setSession(null);
+            setNotice(
+              !roleMatches
+                ? 'This account belongs to a different portal role. Sign in through the matching portal.'
+                : !schoolMatches
+                  ? `This account belongs to ${identity.schoolName}, not the school in this link.`
+                  : config.key === 'student'
+                    ? 'Your login was approved, but no active student record is linked to this account at this school. Ask the school administrator to verify the student record.'
+                    : 'This account has no active school record for this portal. Ask the school administrator to verify its approved role and school link.',
+            );
+            setLoading(false);
+            return;
+          }
+
+          setSession({
+            user: {
+              id: identity.id,
+              email: identity.username,
+              user_metadata: { full_name: identity.fullName },
+            },
+            portalIdentity: identity,
+          });
+          setProfileSetupDone(false);
+          setNotice('');
+          setLoading(false);
+        })
+        .catch((error: unknown) => {
+          if (!alive) return;
+          setSession(null);
+          setNotice(
+            error instanceof Error
+              ? `Could not restore your school account: ${error.message}`
+              : 'Could not restore your school account.',
+          );
+          setLoading(false);
+        });
+
+      return () => {
+        alive = false;
+        window.clearInterval(refreshTimer);
+      };
+    }
+
     const checkSession = async (currentSession: any) => {
       if (!alive) return;
 
@@ -339,10 +494,23 @@ function GenericPortalApp({
 
         if (!alive) return;
 
-        if (!allowed) {
+        const schoolsForUser =
+          allowed && requestedSchoolSlug && config.key !== 'platform-admin'
+            ? await loadPortalSchools(currentSession.user.id, config.key)
+            : [];
+        const matchesSchool =
+          !requestedSchoolSlug ||
+          config.key === 'platform-admin' ||
+          schoolsForUser.some((school) =>
+            schoolMatchesUrl(school, requestedSchoolSlug),
+          );
+
+        if (!allowed || !matchesSchool) {
           setSession(null);
           setNotice(
-            'This account is not authorized for this portal. Contact your school administrator.',
+            allowed && requestedSchoolSlug
+              ? `This account is not linked to the school in this link (/${requestedSchoolSlug}). Check the school address or contact your administrator.`
+              : 'This account is not authorized for this portal. Contact your school administrator.',
           );
           setLoading(false);
 
@@ -386,7 +554,7 @@ function GenericPortalApp({
       alive = false;
       subscription.unsubscribe();
     };
-  }, [config.key]);
+  }, [config.key, requestedSchoolSlug]);
 
   // Load active schools for School Administrator applications.
   useEffect(() => {
@@ -498,11 +666,16 @@ function GenericPortalApp({
           config.key,
         );
         if (!alive) return;
-        setPortalSchools(available);
+        const scopedSchools = requestedSchoolSlug
+          ? available.filter(
+              (school) => schoolMatchesUrl(school, requestedSchoolSlug),
+          )
+          : available;
+        setPortalSchools(scopedSchools);
         setActiveSchoolId((current) =>
-          available.some((school) => school.id === current)
+          scopedSchools.some((school) => school.id === current)
             ? current
-            : available[0]?.id || '',
+            : scopedSchools[0]?.id || '',
         );
       } catch (error) {
         if (!alive) return;
@@ -521,7 +694,7 @@ function GenericPortalApp({
     return () => {
       alive = false;
     };
-  }, [session, config.key]);
+  }, [session, config.key, requestedSchoolSlug]);
 
   // Load real, school-scoped dashboard statistics. Each query is isolated so a
   // single unavailable table cannot break the whole overview.
@@ -914,20 +1087,83 @@ function GenericPortalApp({
     setLoading(true);
 
     try {
+      if (['student', 'parent', 'teacher', 'principal'].includes(config.key)) {
+        if (!requestedSchoolSlug) {
+          setNotice('Open the school-specific portal link before signing in.');
+          setLoading(false);
+          return;
+        }
+
+        const identity = await loginSchoolPortal({
+          schoolSlug: requestedSchoolSlug,
+          role: config.key as SchoolPortalRole,
+          username: email.trim(),
+          password,
+        });
+        const allowed = await hasPortalAccess(
+          identity.id,
+          config.key,
+          identity.schoolId,
+        );
+        const schoolMatches = schoolMatchesUrl(
+          {
+            id: identity.schoolId,
+            name: identity.schoolName,
+            slug: identity.schoolSlug,
+            status: 'active',
+            logo_path: null,
+            motto: null,
+          },
+          requestedSchoolSlug,
+        );
+        if (!allowed || !schoolMatches) {
+          await logoutSchoolPortal();
+          setNotice(!schoolMatches
+            ? `This account belongs to ${identity.schoolName}, not the school in this link.`
+            : config.key === 'student'
+              ? 'Your login was approved, but no active student record is linked to this account at this school. Ask the school administrator to verify the student record.'
+              : 'This account has no active school record for this portal. Ask the school administrator to verify its approved role and school link.');
+          setLoading(false);
+          return;
+        }
+
+        setSession({
+          user: {
+            id: identity.id,
+            email: identity.username,
+            user_metadata: { full_name: identity.fullName },
+          },
+          portalIdentity: identity,
+        });
+        setProfileSetupDone(false);
+        setNotice(identity.welcomeNotification || '');
+        setLoading(false);
+        return;
+      }
+
       let signInEmail = email.trim();
 
       // Students may sign in with their admission number. The lookup function
       // only returns the account email linked to that verified admission
       // number and never exposes any other student data.
       if (config.key === 'student' && !signInEmail.includes('@')) {
+        const lookupFunction = requestedSchoolSlug
+          ? 'resolve_student_login_for_school'
+          : 'resolve_student_login';
+        const lookupArguments = requestedSchoolSlug
+          ? {
+              p_admission_number: signInEmail,
+              p_school_slug: requestedSchoolSlug,
+            }
+          : { p_admission_number: signInEmail };
         const { data: resolved, error: resolveError } = await supabase.rpc(
-          'resolve_student_login',
-          { p_admission_number: signInEmail },
+          lookupFunction,
+          lookupArguments,
         );
 
         if (resolveError) {
           setNotice(
-            'Admission-number sign-in is not available yet. Sign in with your school email address instead.',
+            'Admission-number sign-in is not available yet. Sign in with your school email address instead, or apply the latest database migration.',
           );
           setLoading(false);
           return;
@@ -966,10 +1202,24 @@ function GenericPortalApp({
         config.key,
       );
 
-      if (!allowed) {
+      const schoolsForUser =
+        allowed && requestedSchoolSlug && config.key !== 'platform-admin'
+          ? await loadPortalSchools(data.session.user.id, config.key)
+          : [];
+      const matchesSchool =
+        !requestedSchoolSlug ||
+        config.key === 'platform-admin' ||
+        schoolsForUser.some((school) =>
+          schoolMatchesUrl(school, requestedSchoolSlug),
+        );
+
+      if (!allowed || !matchesSchool) {
         setSession(null);
+        setProfileSetupDone(false);
         setNotice(
-          'This account is not authorized for this portal. Contact your platform or school administrator.',
+          allowed && requestedSchoolSlug
+            ? `This account is not linked to the school in this link (/${requestedSchoolSlug}). Check the school address or contact your administrator.`
+            : 'This account is not authorized for this portal. Contact your platform or school administrator.',
         );
         setLoading(false);
         await supabase.auth.signOut();
@@ -1007,6 +1257,41 @@ function GenericPortalApp({
       return;
     }
 
+    const schoolAccountRoles: RoleKey[] = [
+      'student',
+      'teacher',
+      'parent',
+      'principal',
+    ];
+
+    if (
+      schoolAccountRoles.includes(config.key) &&
+      !requestedSchoolSlug
+    ) {
+      setNotice(
+        'Open your school-specific portal link before requesting an account (for example, /kirinyaga-university).',
+      );
+      return;
+    }
+
+    if (
+      config.key !== 'school-admin' &&
+      !schoolAccountRoles.includes(config.key)
+    ) {
+      setNotice('Account requests are not available for this portal.');
+      return;
+    }
+
+    if (
+      config.key === 'parent' &&
+      (!signupPhone.trim() || !relatedAdmissionNumber.trim())
+    ) {
+      setNotice(
+        'Parents must provide a phone number and the linked student’s admission number.',
+      );
+      return;
+    }
+
     if (
       config.key === 'school-admin' &&
       !schools.some((school) => school.id === selectedSchoolId)
@@ -1018,6 +1303,25 @@ function GenericPortalApp({
     setSignupLoading(true);
 
     try {
+      if (['student', 'parent', 'teacher', 'principal'].includes(config.key)) {
+        await requestSchoolPortalAccount({
+          schoolSlug: requestedSchoolSlug,
+          role: config.key as SchoolPortalRole,
+          username: signupUsername.trim(),
+          password,
+          fullName: name.trim(),
+          phone: signupPhone.trim() || undefined,
+          dateOfBirth: signupDateOfBirth || undefined,
+          relatedAdmissionNumber:
+            relatedAdmissionNumber.trim() || undefined,
+          relationship: parentRelationship.trim() || undefined,
+        });
+        setNotice(
+          `Your request was sent to ${requestedSchoolSlug}. After approval, sign in with the username and password you chose. Your approval notification will include your new school ID for future sign-ins.`,
+        );
+        return;
+      }
+
       const { error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
@@ -1025,6 +1329,22 @@ function GenericPortalApp({
           data: {
             full_name: name.trim(),
             requested_portal: config.key,
+            ...(schoolAccountRoles.includes(config.key)
+              ? {
+                  requested_school_slug: requestedSchoolSlug,
+                  phone: signupPhone.trim() || null,
+                  ...(config.key === 'student'
+                    ? { date_of_birth: signupDateOfBirth || null }
+                    : {}),
+                  ...(config.key === 'parent'
+                    ? {
+                        related_admission_number:
+                          relatedAdmissionNumber.trim(),
+                        relationship: parentRelationship.trim(),
+                      }
+                    : {}),
+                }
+              : {}),
             ...(config.key === 'school-admin'
               ? {
                   requested_school_id: selectedSchoolId,
@@ -1044,6 +1364,10 @@ function GenericPortalApp({
         setNotice(
           'Your School Administrator application has been submitted. Complete email verification if requested. Portal access remains restricted until the Platform Administrator approves your application.',
         );
+      } else if (schoolAccountRoles.includes(config.key)) {
+        setNotice(
+          `Your ${config.title.toLowerCase()} account request was sent to ${requestedSchoolSlug}. The school administrator or principal must approve it before you can sign in. The school will issue your school ID after approval.`,
+        );
       } else {
         setNotice(
           'Signup submitted. Follow any email verification instructions. Access still requires the correct role and any required approval.',
@@ -1059,7 +1383,9 @@ function GenericPortalApp({
   }
 
   async function signout() {
-    if (supabase) {
+    if (['student', 'parent', 'teacher', 'principal'].includes(config.key)) {
+      await logoutSchoolPortal();
+    } else if (supabase) {
       await supabase.auth.signOut();
     }
 
@@ -1188,7 +1514,9 @@ function GenericPortalApp({
 
   if (!session) {
     return (
-      <div className="login-page">
+      <div
+        className={`login-page ${config.key === 'student' ? 'student-login' : ''}`}
+      >
         <div className="login-side">
           <div className="brand-mark">
             <GraduationCap size={24} />
@@ -1212,12 +1540,32 @@ function GenericPortalApp({
             </span>
           </div>
 
+          {config.key === 'student' && (
+            <div className="student-login-highlights">
+              <div>
+                <BookOpen size={17} />
+                <span>Learn at your pace</span>
+              </div>
+              <div>
+                <ClipboardCheck size={17} />
+                <span>Keep track of your work</span>
+              </div>
+              <div>
+                <CalendarDays size={17} />
+                <span>Stay ready for class</span>
+              </div>
+            </div>
+          )}
+
           <div className="login-foot">
             Secure school operations Â· Kenya
           </div>
         </div>
 
         <div className="login-main">
+          <div className="login-theme">
+            <ThemeToggle compact />
+          </div>
           <div className="login-card">
             <div className="mobile-brand">
               <div className="brand-mark">
@@ -1233,20 +1581,44 @@ function GenericPortalApp({
               Use the account issued or approved for this portal.
             </p>
 
+            {['student', 'parent', 'teacher', 'principal'].includes(config.key) && (
+              <p className="muted small">
+                Use your chosen username for your first successful sign-in.
+                After that, sign in with your issued school ID.
+              </p>
+            )}
+
+            {requestedSchoolSlug && config.key !== 'platform-admin' && (
+              <p className="muted small">
+                School link: /{requestedSchoolSlug}. Sign-in is limited to
+                accounts linked to this school.
+              </p>
+            )}
+
             <form onSubmit={login} className="form-stack">
               <label>
-                {config.key === 'student'
-                  ? 'Admission number or email address'
+                {['student', 'parent', 'teacher', 'principal'].includes(
+                  config.key,
+                )
+                  ? 'Username or school ID'
                   : 'Email address'}
                 <input
-                  type={config.key === 'student' ? 'text' : 'email'}
+                  type={
+                    ['student', 'parent', 'teacher', 'principal'].includes(
+                      config.key,
+                    ) || config.key === 'student'
+                      ? 'text'
+                      : 'email'
+                  }
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   autoComplete="username"
                   required
                   placeholder={
-                    config.key === 'student'
-                      ? 'e.g. ADM-2026-001 or you@example.com'
+                    ['student', 'parent', 'teacher', 'principal'].includes(
+                      config.key,
+                    )
+                      ? 'First sign-in: username · Later sign-ins: full issued school ID'
                       : 'you@example.com'
                   }
                 />
@@ -1276,15 +1648,26 @@ function GenericPortalApp({
             )}
 
             <details className="signup-details">
-              <summary>Request an account</summary>
+              <summary>
+                {config.key === 'school-admin'
+                  ? 'Request an account'
+                  : 'Request a school account'}
+              </summary>
 
               <p className="muted small">
-                Account creation and role approval depend on your school’s
-                configured policy. Do not create a student account with an
-                unverified admission number.
+                {['student', 'teacher', 'parent', 'principal'].includes(
+                  config.key,
+                )
+                  ? requestedSchoolSlug
+                    ? `Request access to ${requestedSchoolSlug}. The school administrator or principal reviews each request.`
+                    : 'Use your school-specific link to request an account. A school name is never selected from a public list.'
+                  : 'Account creation and role approval depend on your school’s configured policy.'}
               </p>
 
-              <form onSubmit={signup} className="form-stack">
+              <form
+                onSubmit={signup}
+                className="form-stack"
+              >
                 <label>
                   Full name
                   <input
@@ -1294,6 +1677,63 @@ function GenericPortalApp({
                     required
                   />
                 </label>
+
+                {['student', 'teacher', 'parent', 'principal'].includes(
+                  config.key,
+                ) && (
+                  <label>
+                    Phone number
+                    <input
+                      type="tel"
+                      value={signupPhone}
+                      onChange={(event) =>
+                        setSignupPhone(event.target.value)
+                      }
+                      autoComplete="tel"
+                      required={config.key === 'parent'}
+                      placeholder="e.g. 07xx xxx xxx"
+                    />
+                  </label>
+                )}
+
+                {config.key === 'student' && (
+                  <label>
+                    Date of birth (optional)
+                    <input
+                      type="date"
+                      value={signupDateOfBirth}
+                      onChange={(event) =>
+                        setSignupDateOfBirth(event.target.value)
+                      }
+                    />
+                  </label>
+                )}
+
+                {config.key === 'parent' && (
+                  <>
+                    <label>
+                      Student admission number
+                      <input
+                        value={relatedAdmissionNumber}
+                        onChange={(event) =>
+                          setRelatedAdmissionNumber(event.target.value)
+                        }
+                        required
+                        placeholder="Enter your child's school admission number"
+                      />
+                    </label>
+                    <label>
+                      Relationship to student
+                      <input
+                        value={parentRelationship}
+                        onChange={(event) =>
+                          setParentRelationship(event.target.value)
+                        }
+                        required
+                      />
+                    </label>
+                  </>
+                )}
 
                 {config.key === 'school-admin' && (
                   <>
@@ -1333,16 +1773,35 @@ function GenericPortalApp({
                   </>
                 )}
 
-                <label>
-                  Email address
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    autoComplete="email"
-                    required
-                  />
-                </label>
+                {['student', 'parent', 'teacher', 'principal'].includes(
+                  config.key,
+                ) ? (
+                  <label>
+                    Choose a username
+                    <input
+                      value={signupUsername}
+                      onChange={(event) =>
+                        setSignupUsername(event.target.value)
+                      }
+                      autoComplete="username"
+                      minLength={3}
+                      maxLength={80}
+                      required
+                      placeholder="Create a username for your first sign-in"
+                    />
+                  </label>
+                ) : (
+                  <label>
+                    Email address
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      autoComplete="email"
+                      required
+                    />
+                  </label>
+                )}
 
                 <label>
                   Create password
@@ -1361,7 +1820,18 @@ function GenericPortalApp({
                   type="submit"
                   disabled={
                     signupLoading ||
-                    (config.key === 'school-admin' && schools.length === 0)
+                    (config.key === 'school-admin' && schools.length === 0) ||
+                    (['student', 'teacher', 'parent', 'principal'].includes(
+                      config.key,
+                    ) &&
+                      !requestedSchoolSlug) ||
+                    ![
+                      'school-admin',
+                      'student',
+                      'teacher',
+                      'parent',
+                      'principal',
+                    ].includes(config.key)
                   }
                 >
                   {signupLoading
@@ -1372,13 +1842,29 @@ function GenericPortalApp({
             </details>
 
             <p className="muted tiny">
-              {supabaseReady
-                ? 'Secure sign-in service configured.'
-                : 'Setup preview Â· Connect Supabase to enable real sign-in.'}
+              {['student', 'parent', 'teacher', 'principal'].includes(config.key)
+                ? 'School sign-in requires the local auth API and server credentials. Start it with npm run dev:portal-auth.'
+                : supabaseReady
+                  ? 'Secure sign-in service configured.'
+                  : 'Setup preview Â· Connect Supabase to enable real sign-in.'}
             </p>
           </div>
         </div>
       </div>
+    );
+  }
+
+  const portalIdentity = session.portalIdentity as PortalIdentity | undefined;
+  if (
+    portalIdentity &&
+    ['student', 'parent', 'teacher', 'principal'].includes(config.key) &&
+    !profileSetupDone
+  ) {
+    return (
+      <PortalProfileCompletion
+        identity={portalIdentity}
+        onComplete={completeProfileSetup}
+      />
     );
   }
 
@@ -1389,7 +1875,7 @@ function GenericPortalApp({
   }
 
   return (
-    <div className="app-frame">
+    <div className={`app-frame ${config.key === 'student' ? 'student-portal' : ''}`}>
       <aside className={`sidebar ${mobileNav ? 'show' : ''}`}>
         <div className="side-brand">
           <div className="brand-mark">
@@ -1487,6 +1973,11 @@ function GenericPortalApp({
               <b>Role-restricted access</b>
               <span>Only authorized records should appear here.</span>
             </div>
+          </div>
+
+          <div className="sidebar-theme">
+            <div className="nav-caption">APPEARANCE</div>
+            <ThemeToggle />
           </div>
 
           <button className="nav-item signout" onClick={signout}>
@@ -1671,27 +2162,72 @@ function GenericPortalApp({
               </div>
             </section>
           ) : page !== 'Overview' ? (
-            <PortalWorkspace
-              role={config.key}
-              page={page}
-              school={activeSchool}
-              schools={portalSchools}
-              onSchoolChange={setActiveSchoolId}
-              onNavigate={setPage}
-            />
+            <>
+              {notice && (
+                <div className="notice" role="status">
+                  {notice}
+                </div>
+              )}
+              <PortalWorkspace
+                role={config.key}
+                page={page}
+                school={activeSchool}
+                schools={portalSchools}
+                onSchoolChange={setActiveSchoolId}
+                onNavigate={setPage}
+              />
+            </>
           ) : (
             <>
               <section className="welcome-row">
                 <div>
-                  <p className="eyebrow">YOUR WORKSPACE</p>
-                  <h2>
-                    {config.key === 'parent'
-                      ? 'Your family, in one place'
-                      : config.key === 'student'
-                        ? 'Keep learning, one step at a time'
-                        : `Welcome to your ${config.title.toLowerCase()} portal`}
-                  </h2>
-                  <p className="muted">{config.intro}</p>
+                  {config.key === 'student' ? (
+                    <>
+                      <p className="eyebrow">YOUR LEARNING SPACE</p>
+                      <h2>
+                        Welcome back, {displayName.split(' ')[0]}!
+                      </h2>
+                      <p className="muted">
+                        Your next great idea starts here. Pick up where you left
+                        off and keep moving forward.
+                      </p>
+                      {activeSchool && (
+                        <div className="student-school-label">
+                          <GraduationCap size={16} />
+                          <span>{activeSchool.name}</span>
+                        </div>
+                      )}
+                      <div className="student-hero-actions">
+                        <button
+                          className="student-hero-primary"
+                          type="button"
+                          onClick={() => setPage('My assignments')}
+                        >
+                          <BookOpen size={16} />
+                          My assignments
+                          <ArrowRight size={15} />
+                        </button>
+                        <button
+                          className="student-hero-secondary"
+                          type="button"
+                          onClick={() => setPage('Timetable')}
+                        >
+                          <CalendarDays size={16} />
+                          View timetable
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="eyebrow">YOUR WORKSPACE</p>
+                      <h2>
+                        {config.key === 'parent'
+                          ? 'Your family, in one place'
+                          : `Welcome to your ${config.title.toLowerCase()} portal`}
+                      </h2>
+                      <p className="muted">{config.intro}</p>
+                    </>
+                  )}
                 </div>
 
                 <div className="welcome-avatar">
@@ -2013,5 +2549,3 @@ function getStats(role: RoleKey) {
 export function PortalApp({ config }: { config: PortalConfig }) {
   return <GenericPortalApp config={config} />;
 }
-
-
